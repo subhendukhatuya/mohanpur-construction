@@ -1,30 +1,20 @@
 /**********************************************************************
  * MOHANPUR CONSTRUCTION — Google Apps Script backend
- * Connects the GitHub website to your Google Sheet (acts as the database)
  *
- * SETUP (one time):
- *  1. Create a Google Sheet. Rename the tab to "hisab-mohanpur-construction"
- *     (or create a sheet with that exact name). In row 1 put these headers
- *     (exactly, in this order):
- *        id | date | member | flow | category | amount | note
- *  2. In the Sheet menu: Extensions > Apps Script. Delete any code,
- *     paste THIS whole file, and Save.
- *  3. Click Deploy > New deployment > type "Web app".
- *        - Execute as:  Me
- *        - Who has access:  Anyone
- *     Deploy, authorise, and COPY the Web app URL.
- *  4. Paste that URL into CONFIG.APPS_SCRIPT_URL in index.html.
- *
- * Re-deploy (Deploy > Manage deployments > edit > Deploy) after any
- * code change so the new version goes live.
- *
- * flow values: "Credit" (money in) or "Expense" (debit / construction spend)
- * categories: Rod, Cement, Chips, Sand, Bricks, Labour, Soil, Paper,
- *             Tiles, Pipe, Electricity, Other (for Expense)
+ * SETUP:
+ *  1. Create a Google Sheet. Rename tab to "hisab-mohanpur-construction"
+ *     Row 1 headers: id | date | member | flow | category | amount | note
+ *     (A "History" tab is created automatically for activity logs.)
+ *  2. Extensions > Apps Script → paste this file → Save
+ *  3. Deploy > Web app → Execute as Me → Anyone → copy URL
+ *  4. Paste URL into CONFIG.APPS_SCRIPT_URL in index.html
  **********************************************************************/
 
 var SHEET_NAME = "hisab-mohanpur-construction";
+var HISTORY_SHEET = "History";
 var HEADERS = ["id", "date", "member", "flow", "category", "amount", "note"];
+var HISTORY_HEADERS = ["id", "ts", "action", "by", "entry", "prev"];
+var VERSION = "1.1-history-sync";
 
 function getSheet_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -35,12 +25,25 @@ function getSheet_() {
   return sh;
 }
 
-var VERSION = "1.0-mohanpur";
+function getHistorySheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(HISTORY_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(HISTORY_SHEET);
+    sh.getRange(1, 1, 1, HISTORY_HEADERS.length).setValues([HISTORY_HEADERS]);
+  } else if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, HISTORY_HEADERS.length).setValues([HISTORY_HEADERS]);
+  }
+  return sh;
+}
 
 function doGet(e) {
   try {
     if (e && e.parameter && e.parameter.action === "ping") {
       return json_({ ok: true, version: VERSION });
+    }
+    if (e && e.parameter && e.parameter.action === "history") {
+      return json_({ ok: true, data: readHistory_() });
     }
     var sh = getSheet_();
     var values = sh.getDataRange().getValues();
@@ -61,6 +64,35 @@ function doGet(e) {
     return json_({ ok: true, data: out });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
+  }
+}
+
+function readHistory_() {
+  var sh = getHistorySheet_();
+  if (sh.getLastRow() <= 1) return [];
+  var values = sh.getDataRange().getValues();
+  var out = [];
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    if (!row[0]) continue;
+    out.push({
+      id: String(row[0]),
+      ts: String(row[1] || ""),
+      action: String(row[2] || ""),
+      by: String(row[3] || ""),
+      entry: parseJson_(row[4]),
+      prev: row[5] ? parseJson_(row[5]) : null
+    });
+  }
+  out.sort(function(a, b) { return String(b.ts).localeCompare(String(a.ts)); });
+  return out;
+}
+
+function parseJson_(val) {
+  try {
+    return JSON.parse(String(val || "{}"));
+  } catch (e) {
+    return {};
   }
 }
 
@@ -85,6 +117,20 @@ function doPost(e) {
       var rd = findRowById_(sh, body.id);
       if (rd === -1) return json_({ ok: false, error: "id not found" });
       sh.deleteRow(rd);
+      return json_({ ok: true });
+    }
+
+    if (body.action === "logHistory" && body.item) {
+      var hi = body.item;
+      var hsh = getHistorySheet_();
+      hsh.appendRow([
+        hi.id || String(Date.now()),
+        hi.ts || new Date().toISOString(),
+        hi.action || "",
+        hi.by || "",
+        JSON.stringify(hi.entry || {}),
+        hi.prev ? JSON.stringify(hi.prev) : ""
+      ]);
       return json_({ ok: true });
     }
 
@@ -115,10 +161,26 @@ function findRowById_(sh, id) {
 }
 
 function formatDate_(d) {
-  if (d instanceof Date) {
+  if (d instanceof Date && !isNaN(d.getTime())) {
     return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
   }
-  return String(d || "");
+  if (typeof d === "number" && d > 1000) {
+    var serial = new Date(Math.round((d - 25569) * 86400 * 1000));
+    if (!isNaN(serial.getTime())) {
+      return Utilities.formatDate(serial, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
+  }
+  var s = String(d || "").trim();
+  if (!s) return "";
+  var iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+  var dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (dmy) {
+    var yr = Number(dmy[3]);
+    if (yr < 100) yr += 2000;
+    return yr + "-" + ("0" + dmy[2]).slice(-2) + "-" + ("0" + dmy[1]).slice(-2);
+  }
+  return s;
 }
 
 function json_(obj) {

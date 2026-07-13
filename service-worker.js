@@ -1,6 +1,6 @@
 /* Mohanpur Construction service worker — installable PWA + offline shell.
    Bump CACHE_VERSION whenever you change index.html or assets. */
-const CACHE_VERSION = "mohanpur-v1";
+const CACHE_VERSION = "mohanpur-v2";
 
 const PRECACHE = [
   "./",
@@ -9,6 +9,7 @@ const PRECACHE = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon-maskable-512.png",
+  "./icons/home-icon.png",
   "./photos/Surjendu.jpg",
   "./photos/Madhumita.jpg",
   "./photos/Subhendu.jpg",
